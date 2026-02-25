@@ -316,30 +316,32 @@ if choice == 'y':
     ast_file = f"asterisk_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
     
-    # 1. Check and install sngrep
-    log("\nVerifica presenza sngrep...", Colors.OKGREEN)
+    # 1. Check and install capture tools
+    log("\nVerifica presenza sngrep/tcpdump...", Colors.OKGREEN)
     if not run_cmd("command -v sngrep", shell=True):
         log("sngrep non trovato. Installazione in corso...", Colors.WARNING)
         run_cmd("dnf -y install http://repo.okay.com.mx/centos/9/x86_64/release/sngrep-1.6.0-1.el9.x86_64.rpm strace vim", shell=True)
-        log("sngrep installato.", Colors.OKGREEN)
-    else:
-        log("sngrep è già installato.", Colors.OKGREEN)
+    if is_tls and not run_cmd("command -v tcpdump", shell=True):
+        log("tcpdump non trovato. Installazione in corso...", Colors.WARNING)
+        run_cmd("dnf -y install tcpdump", shell=True)
+        
+    log("Tool di cattura pronti.", Colors.OKGREEN)
         
     # 2. Start captures
     log(f"\nAvvio ascolto su {target_instance} per {duration} secondi...", Colors.HEADER)
     log("Ti suggerisco di EVOCARE ORA LA CHIAMATA PROBLEMATICA.", Colors.FAIL)
     
-    # SNGREP
+    # SIP CAPTURE
+    capture_proc_name = "sngrep"
     if is_tls and proxy_instance:
-        log("Configurazione log TLS su proxy e sngrep locally...", Colors.WARNING)
+        log("Configurazione log TLS su proxy e cattura HEP con tcpdump...", Colors.WARNING)
         # Abilita su kamailio
         run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status on", shell=True)
-        # Crea hep2rc
-        with open("/root/.sngrephep2rc", "w") as f:
-            f.write("set capture.device lo\nset eep.listen on\nset eep.listen.version 2\nset eep.listen.address 127.0.0.1\nset eep.listen.port 5065\n")
         
-        # Purtroppo salvare PCAP con SNGREP catturando via HEP non decripta il PCAP, ma permette l'esportazione SIP testuale
-        sngrep_cmd = f"sngrep -f /root/.sngrephep2rc -d any -N -O {sngrep_file}"
+        # In TLS riceviamo pacchetti HEP su loopback (5065). SNGREP non salva i pcap da socket UDP nativi, quindi usiamo tcpdump.
+        # Il file PCAP risultante conterrà i pacchetti UDP HEP decodificabili da Wireshark o sngrep.
+        sngrep_cmd = f"tcpdump -i lo udp port 5065 -w {sngrep_file}"
+        capture_proc_name = "tcpdump"
     else:
         sngrep_cmd = f"sngrep -r -d any -N -O {sngrep_file}"
         
@@ -361,7 +363,7 @@ if choice == 'y':
     log("Termine ascolto in corso, finalizzazione dei log...", Colors.WARNING)
     
     # 4. Stop captures gracefully to allow PCAP flushing
-    run_cmd("pkill -INT sngrep", shell=True)
+    run_cmd(f"pkill -INT {capture_proc_name}", shell=True)
     time.sleep(1.5) # Give it time to flush the .pcap file
     # Ensure terminal is restored correctly (fix staircase effect)
     run_cmd("stty sane", shell=True)
@@ -373,9 +375,6 @@ if choice == 'y':
     if is_tls and proxy_instance:
         # Disable siptrace
         run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status off", shell=True)
-        # Cleanup
-        if os.path.exists("/root/.sngrephep2rc"):
-            os.remove("/root/.sngrephep2rc")
         
 
     log("\n[Cattura Completata con Successo!]", Colors.OKGREEN)
