@@ -3,7 +3,7 @@
 Tool di diagnostica per installazioni **NethServer 8** con moduli **NethVoice**.  
 Ora suddiviso in **due script indipendenti** + un modulo di utility condivise.
 
-> **Requisiti**: Python 3 (nessuna dipendenza esterna), esecuzione come `root`.
+> **Requisiti**: Python (nessuna dipendenza esterna), esecuzione come `root`.
 
 ---
 
@@ -20,7 +20,7 @@ Ora suddiviso in **due script indipendenti** + un modulo di utility condivise.
 ## 1. Analisi Sistema e Container
 
 ```bash
-python3 nethserver_analyzer.py
+python nethserver_analyzer.py
 ```
 
 ### Cosa analizza
@@ -39,7 +39,7 @@ python3 nethserver_analyzer.py
 ## 2. Cattura Chiamate Live
 
 ```bash
-python3 call_analyzer.py
+python call_analyzer.py
 ```
 
 ### Flusso interattivo
