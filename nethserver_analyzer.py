@@ -167,12 +167,14 @@ if not istances:
     log("Nessuna istanza di NethVoice trovata.", Colors.WARNING)
 else:
     # --- Chiediamo all'utente quale istanza analizzare --- 
-    log("\nIstanze trovate:", Colors.HEADER)
+    log("\nIstanze trovate nel sistema:", Colors.HEADER)
     for idx, inst in enumerate(istances):
-        log(f"  {idx + 1}. {inst}")
-    log(f"  A. Tutte le istanze (All)")
+        log(f"  [{idx + 1}] {inst}")
+    log(f"  [A] Analizza TUTTE le istanze")
     
-    scelta = input(f"\n{Colors.WARNING}Quale istanza vuoi analizzare? (Inserisci il numero o 'A'): {Colors.ENDC}").strip().lower()
+    # Prendi la prima istanza come esempio per il prompt (se esiste)
+    esempio = istances[0] if istances else "nethvoice1"
+    scelta = input(f"\n{Colors.WARNING}Quale istanza vuoi analizzare? (Inserisci il numero, es. '1' per {esempio}, oppure 'A' per tutte): {Colors.ENDC}").strip().lower()
     
     istanze_selezionate = []
     if scelta == 'a' or scelta == 'all':
