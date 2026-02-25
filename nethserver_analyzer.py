@@ -352,7 +352,7 @@ if choice == 'y':
             except Exception:
                 return
 
-            debug_file = output_file.replace('.pcap', '_debug.txt')
+            debug_file = f"debug_pcap_{output_file.replace('.pcap','')}.txt"
             pkt_count = 0
             SIP_METHODS = [b'INVITE', b'REGISTER', b'OPTIONS', b'ACK', b'BYE',
                            b'CANCEL', b'SIP/2.0', b'SUBSCRIBE', b'NOTIFY',
