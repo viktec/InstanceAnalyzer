@@ -84,7 +84,7 @@ wireshark capture_nethvoice1_*.pcap      # Da PC dopo trasferimento via WinSCP
 Chiamata TLS (SIPS)
         │
         ▼
-┌──────────────┐       HEP/UDP        ┌──────────────────┐
+┌──────────────┐       HEP/UDP         ┌──────────────────┐
 │  Kamailio    │ ───────────────────►  │  Python Decoder  │
 │  (siptrace)  │    127.0.0.1:5065     │  (socket UDP)    │
 └──────────────┘                       └──────┬───────────┘
