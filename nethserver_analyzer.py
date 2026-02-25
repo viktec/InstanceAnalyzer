@@ -166,7 +166,30 @@ istances = [i for i in istances_raw.split('\n') if i and i != "nethvoice-proxy"]
 if not istances:
     log("Nessuna istanza di NethVoice trovata.", Colors.WARNING)
 else:
-    for istanza in istances:
+    # --- Chiediamo all'utente quale istanza analizzare --- 
+    log("\nIstanze trovate:", Colors.HEADER)
+    for idx, inst in enumerate(istances):
+        log(f"  {idx + 1}. {inst}")
+    log(f"  A. Tutte le istanze (All)")
+    
+    scelta = input(f"\n{Colors.WARNING}Quale istanza vuoi analizzare? (Inserisci il numero o 'A'): {Colors.ENDC}").strip().lower()
+    
+    istanze_selezionate = []
+    if scelta == 'a' or scelta == 'all':
+        istanze_selezionate = istances
+    else:
+        try:
+            indice = int(scelta) - 1
+            if 0 <= indice < len(istances):
+                istanze_selezionate = [istances[indice]]
+            else:
+                log("Selezione non valida. Analizzo tutte le istanze per default.", Colors.FAIL)
+                istanze_selezionate = istances
+        except ValueError:
+            log("Input non riconosciuto. Analizzo tutte le istanze per default.", Colors.FAIL)
+            istanze_selezionate = istances
+
+    for istanza in istanze_selezionate:
         log(f"\n[{Colors.HEADER}+++ Analisi Istanza: {istanza} +++{Colors.ENDC}]")
         
         # CPU/RAM in container
@@ -248,11 +271,10 @@ while True:
 if choice == 'y':
     log("\n[Avvio Analisi Live...]", Colors.HEADER)
     
-    # Setup instances list for the user
-    ist_display = ", ".join(istances) if istances else "Nessuna istanza trovata"
-    log(f"Istanze NethVoice disponibili: {ist_display}", Colors.OKGREEN)
+    ist_display = ", ".join(istanze_selezionate) if 'istanze_selezionate' in locals() and istanze_selezionate else ", ".join(istances)
+    log(f"Istanze analizzate in precedenza: {ist_display}", Colors.OKGREEN)
     
-    target_instance = input(f"{Colors.WARNING}Inserisci il nome dell'istanza da analizzare (es. nethvoice1): {Colors.ENDC}").strip()
+    target_instance = input(f"{Colors.WARNING}Inserisci il nome dell'istanza da analizzare per il traffico (es. nethvoice1): {Colors.ENDC}").strip()
     
     if target_instance not in istances:
         log(f"Attenzione: l'istanza '{target_instance}' non sembra attiva o corretta. L'analisi potrebbe fallire.", Colors.FAIL)
