@@ -400,7 +400,7 @@ if choice == 'y':
                         # --- HEPv1 / HEPv2 ---
                         elif data[0] in (1, 2):
                             detected_ver = f"HEPv{data[0]}"
-                            hdr_len = data[1]
+                            hdr_len = data[1]  # Base header length (tipicamente 16)
                             if hdr_len > len(data):
                                 continue
                             sport = struct.unpack('!H', data[4:6])[0]
@@ -408,7 +408,12 @@ if choice == 'y':
                             if data[2] == 2 and hdr_len >= 16:  # IPv4
                                 src_ip = data[8:12]
                                 dst_ip = data[12:16]
-                            sip_payload = data[hdr_len:]
+                            # HEPv2 ha una timestamp extension header di 12 byte dopo il base header:
+                            # tv_sec(4) + tv_usec(4) + captid(4) = 12 bytes
+                            if data[0] == 2:
+                                sip_payload = data[hdr_len + 12:]
+                            else:
+                                sip_payload = data[hdr_len:]
 
                         # --- Fallback: forse è SIP puro senza HEP ---
                         else:
