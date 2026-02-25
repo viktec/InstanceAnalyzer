@@ -11,6 +11,9 @@ import sys
 import time
 import subprocess
 import re
+import socket
+import struct
+import threading
 from datetime import datetime
 import json
 
@@ -315,42 +318,127 @@ if choice == 'y':
     sngrep_file = f"capture_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
     ast_file = f"asterisk_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
-    
-    # 1. Check and install capture tools
-    log("\nVerifica presenza sngrep/tcpdump...", Colors.OKGREEN)
-    if not run_cmd("command -v sngrep", shell=True):
-        log("sngrep non trovato. Installazione in corso...", Colors.WARNING)
-        run_cmd("dnf -y install http://repo.okay.com.mx/centos/9/x86_64/release/sngrep-1.6.0-1.el9.x86_64.rpm strace vim", shell=True)
-    if is_tls and not run_cmd("command -v tcpdump", shell=True):
-        log("tcpdump non trovato. Installazione in corso...", Colors.WARNING)
-        run_cmd("dnf -y install tcpdump", shell=True)
-        
-    log("Tool di cattura pronti.", Colors.OKGREEN)
-        
+    # 1. Check and install sngrep (only needed for non-TLS)
+    if not is_tls:
+        log("\nVerifica presenza sngrep...", Colors.OKGREEN)
+        if not run_cmd("command -v sngrep", shell=True):
+            log("sngrep non trovato. Installazione in corso...", Colors.WARNING)
+            run_cmd("dnf -y install http://repo.okay.com.mx/centos/9/x86_64/release/sngrep-1.6.0-1.el9.x86_64.rpm strace vim", shell=True)
+        log("Tool di cattura pronti.", Colors.OKGREEN)
+
     # 2. Start captures
     log(f"\nAvvio ascolto su {target_instance} per {duration} secondi...", Colors.HEADER)
     log("Ti suggerisco di EVOCARE ORA LA CHIAMATA PROBLEMATICA.", Colors.FAIL)
-    
-    # SIP CAPTURE
-    capture_proc_name = "sngrep"
+
+    # --- SIP CAPTURE ---
+    stop_event = threading.Event()
+    hep_thread = None
+
     if is_tls and proxy_instance:
-        log("Configurazione log TLS su proxy e cattura HEP con tcpdump...", Colors.WARNING)
-        # Abilita su kamailio
+        log("Configurazione cattura TLS via HEP decoder Python nativo...", Colors.WARNING)
+        # Abilita siptrace su kamailio proxy
         run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status on", shell=True)
-        
-        # In TLS riceviamo pacchetti HEP su loopback (5065). SNGREP non salva i pcap da socket UDP nativi, quindi usiamo tcpdump.
-        # Il file PCAP risultante conterrà i pacchetti UDP HEP decodificabili da Wireshark.
-        sngrep_cmd = f"tcpdump -i any -s 0 udp port 5065 -w {sngrep_file}"
-        capture_proc_name = "tcpdump"
+
+        # Funzione di cattura HEP -> PCAP pulito (gira in un thread)
+        def capture_hep_to_pcap(output_file, stop_evt):
+            """Ascolta sulla porta UDP 5065 i pacchetti HEP di Kamailio,
+            li decodifica (HEPv2/v3) ed estrae il payload SIP puro,
+            scrivendolo in un file PCAP standard leggibile da Wireshark e sngrep."""
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(('127.0.0.1', 5065))
+                sock.settimeout(1.0)
+            except Exception:
+                return
+
+            with open(output_file, 'wb') as f:
+                # PCAP Global Header (link type 101 = Raw IP)
+                f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 101))
+
+                while not stop_evt.is_set():
+                    try:
+                        data, addr = sock.recvfrom(65535)
+                        if len(data) < 6:
+                            continue
+
+                        src_ip = b'\x00\x00\x00\x00'
+                        dst_ip = b'\x00\x00\x00\x00'
+                        sport = 0
+                        dport = 0
+                        sip_payload = b''
+                        proto = 17  # UDP
+
+                        # --- HEPv3 (chunk-based, header "HEP3") ---
+                        if data[:4] == b'HEP3':
+                            pos = 6
+                            while pos + 6 <= len(data):
+                                ch_vendor = struct.unpack('!H', data[pos:pos+2])[0]
+                                ch_type   = struct.unpack('!H', data[pos+2:pos+4])[0]
+                                ch_len    = struct.unpack('!H', data[pos+4:pos+6])[0]
+                                if ch_len < 6 or pos + ch_len > len(data):
+                                    break
+                                ch_data = data[pos+6:pos+ch_len]
+                                if ch_vendor == 0:
+                                    if   ch_type == 3  and len(ch_data) >= 4: src_ip = ch_data[:4]
+                                    elif ch_type == 4  and len(ch_data) >= 4: dst_ip = ch_data[:4]
+                                    elif ch_type == 7  and len(ch_data) >= 2: sport  = struct.unpack('!H', ch_data[:2])[0]
+                                    elif ch_type == 8  and len(ch_data) >= 2: dport  = struct.unpack('!H', ch_data[:2])[0]
+                                    elif ch_type == 15: sip_payload = ch_data
+                                pos += ch_len
+
+                        # --- HEPv1 / HEPv2 ---
+                        elif data[0] in (1, 2):
+                            hdr_len = data[1]
+                            if hdr_len > len(data):
+                                continue
+                            sport = struct.unpack('!H', data[4:6])[0]
+                            dport = struct.unpack('!H', data[6:8])[0]
+                            if data[2] == 2 and hdr_len >= 16:  # IPv4
+                                src_ip = data[8:12]
+                                dst_ip = data[12:16]
+                            sip_payload = data[hdr_len:]
+                        else:
+                            continue
+
+                        if not sip_payload:
+                            continue
+
+                        # Costruiamo un pacchetto IP+UDP finto con il payload SIP reale
+                        udp_len = 8 + len(sip_payload)
+                        udp_hdr = struct.pack('!HHHH', sport, dport, udp_len, 0)
+                        ip_total = 20 + udp_len
+                        ip_hdr = struct.pack('!BBHHHBBH4s4s',
+                            0x45, 0, ip_total, 0, 0x4000, 64, proto, 0, src_ip, dst_ip)
+                        packet = ip_hdr + udp_hdr + sip_payload
+
+                        # PCAP Packet Record
+                        ts = time.time()
+                        ts_sec = int(ts)
+                        ts_usec = int((ts - ts_sec) * 1000000)
+                        f.write(struct.pack('<IIII', ts_sec, ts_usec, len(packet), len(packet)))
+                        f.write(packet)
+                        f.flush()
+
+                    except socket.timeout:
+                        continue
+                    except Exception:
+                        continue
+            sock.close()
+
+        # Avvia il decoder HEP in un thread separato
+        hep_thread = threading.Thread(target=capture_hep_to_pcap, args=(sngrep_file, stop_event), daemon=True)
+        hep_thread.start()
+        log("Decoder HEP Python avviato su 127.0.0.1:5065", Colors.OKGREEN)
     else:
+        # Non-TLS: usa sngrep classico
         sngrep_cmd = f"sngrep -r -d any -N -O {sngrep_file}"
-        
-    sngrep_proc = subprocess.Popen(sngrep_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
-    # ASTERISK LOGS (in background redigenti in file)
+        sngrep_proc = subprocess.Popen(sngrep_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # ASTERISK LOGS (in background)
     ast_cmd = f"runagent -m {target_instance} -- podman exec -it freepbx asterisk -rvvvvvv > {ast_file} 2>&1"
     ast_proc = subprocess.Popen(ast_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
+
     # 3. Wait with visual progress bar
     log("")
     for i in range(duration):
@@ -358,41 +446,43 @@ if choice == 'y':
         sys.stdout.write(f"\rIn ascolto: {create_bar(progress, length=40)}")
         sys.stdout.flush()
         time.sleep(1)
-    
+
     print("\n")
     log("Termine ascolto in corso, finalizzazione dei log...", Colors.WARNING)
-    
-    # 4. Stop captures gracefully to allow PCAP flushing
-    run_cmd(f"pkill -INT {capture_proc_name}", shell=True)
-    time.sleep(1.5) # Give it time to flush the .pcap file
-    # Ensure terminal is restored correctly (fix staircase effect)
+
+    # 4. Stop captures
+    if is_tls and proxy_instance:
+        # Ferma il thread HEP
+        stop_event.set()
+        if hep_thread:
+            hep_thread.join(timeout=3)
+        # Disabilita siptrace su kamailio
+        run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status off", shell=True)
+    else:
+        # Ferma sngrep
+        run_cmd("pkill -INT sngrep", shell=True)
+        time.sleep(1.5)
+
+    # Restore terminal
     run_cmd("stty sane", shell=True)
     print("\r", end="")
 
     # Pkill asterisk console sessions safely
     run_cmd(f"runagent -m {target_instance} -- podman exec -it freepbx pkill -9 -f 'asterisk -r'", shell=True)
-    
-    if is_tls and proxy_instance:
-        # Disable siptrace
-        run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status off", shell=True)
-        
 
     log("\n[Cattura Completata con Successo!]", Colors.OKGREEN)
-    
-    # Get file sizes to reassure the user
+
+    # Get file sizes
     ast_size = f"{os.path.getsize(ast_file)/1024:.1f} KB" if os.path.exists(ast_file) else "0 KB"
     sngrep_size = f"{os.path.getsize(sngrep_file)/1024:.1f} KB" if os.path.exists(sngrep_file) else "0 KB"
-    
+
     log(f"  - Dump Asterisk: {ast_file} ({ast_size})")
-    log(f"  - Dump SNGREP (SIP/HEP): {sngrep_file} ({sngrep_size})")
-    log("Puoi trasferire questi file aprendo WinSCP oppure copiarli dal terminale.\n", Colors.HEADER)
-    
+    log(f"  - Dump SIP: {sngrep_file} ({sngrep_size})")
+    log("Puoi trasferire questi file aprendo WinSCP oppure copiarli dal terminale.", Colors.HEADER)
+
     if is_tls:
-        log("NOTA BENE PER I FILE TLS (PROXY):", Colors.WARNING)
-        log("I log catturati in modalità proxy TLS sono decodificati ma incapsulati in pacchetti HEP sulle porte UDP/5065.")
-        log("SNGREP *NON PUÒ* LEGGERE OFFLINE I PACCHETTI HEP DA FILE .PCAP CON IL COMANDO 'sngrep -I'!!", Colors.FAIL)
-        log("Per vedere il contenuto di questo file pcap scaricalo sul PC e aprilo con **Wireshark** (Tasto destro su un pacchetto -> Decode As -> HEP).", Colors.WARNING)
-        log("")
-    
+        log("\nIl file PCAP TLS è stato decodificato automaticamente dal nostro decoder HEP.", Colors.OKGREEN)
+        log("Puoi aprirlo direttamente con Wireshark o con 'sngrep -I <file.pcap>' e vedrai il traffico SIP in chiaro!\n", Colors.OKGREEN)
+
 else:
     log("\nAnalisi realtime saltata come da richiesta.", Colors.OKGREEN)
