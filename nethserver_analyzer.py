@@ -353,8 +353,10 @@ if choice == 'y':
                 return
 
             with open(output_file, 'wb') as f:
-                # PCAP Global Header (link type 101 = Raw IP)
-                f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 101))
+                # PCAP Global Header (link type 1 = Ethernet)
+                f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
+                # Fake Ethernet header: dst_mac(6) + src_mac(6) + ethertype IPv4(2) = 14 bytes
+                eth_hdr = b'\x00\x00\x00\x00\x00\x00' b'\x00\x00\x00\x00\x00\x00' b'\x08\x00'
 
                 while not stop_evt.is_set():
                     try:
@@ -404,13 +406,22 @@ if choice == 'y':
                         if not sip_payload:
                             continue
 
-                        # Costruiamo un pacchetto IP+UDP finto con il payload SIP reale
+                        # Costruiamo un pacchetto Ethernet+IP+UDP con il payload SIP reale
                         udp_len = 8 + len(sip_payload)
                         udp_hdr = struct.pack('!HHHH', sport, dport, udp_len, 0)
                         ip_total = 20 + udp_len
-                        ip_hdr = struct.pack('!BBHHHBBH4s4s',
+                        # IP header senza checksum (campo checksum = 0)
+                        ip_hdr_raw = struct.pack('!BBHHHBBH4s4s',
                             0x45, 0, ip_total, 0, 0x4000, 64, proto, 0, src_ip, dst_ip)
-                        packet = ip_hdr + udp_hdr + sip_payload
+                        # Calcola IP checksum
+                        chksum = 0
+                        for i in range(0, 20, 2):
+                            chksum += (ip_hdr_raw[i] << 8) + ip_hdr_raw[i+1]
+                        chksum = (chksum >> 16) + (chksum & 0xFFFF)
+                        chksum = ~chksum & 0xFFFF
+                        ip_hdr = ip_hdr_raw[:10] + struct.pack('!H', chksum) + ip_hdr_raw[12:]
+
+                        packet = eth_hdr + ip_hdr + udp_hdr + sip_payload
 
                         # PCAP Packet Record
                         ts = time.time()
