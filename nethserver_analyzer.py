@@ -269,7 +269,8 @@ if choice == 'y':
         log("Valore non valido. Utilizzo 60 secondi come default.", Colors.FAIL)
         
     sngrep_file = f"capture_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
-    ast_file = f"asterisk_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    ast_file = f"asterisk_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
     
     # 1. Check and install sngrep
     log("\nVerifica presenza sngrep...", Colors.OKGREEN)
