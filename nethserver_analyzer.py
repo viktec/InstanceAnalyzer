@@ -235,4 +235,103 @@ tr_out = run_cmd("traceroute 8.8.8.8", shell=True)
 log(tr_out)
 
 print_section("Analisi Completata")
-log(f"I risultati sono stati salvati ed esportati nel file: {OUTPUT_FILE}", Colors.OKGREEN)
+log(f"I risultati principali sono stati salvati nel file: {OUTPUT_FILE}", Colors.OKGREEN)
+
+# --- 5. Live Call Analyzer (Interactive) ---
+print_section("4. Advanced: Live Call Analysis")
+
+while True:
+    choice = input(f"{Colors.WARNING}Vuoi analizzare le chiamate in tempo reale? (y/n) {Colors.ENDC}").strip().lower()
+    if choice in ['y', 'n']:
+        break
+
+if choice == 'y':
+    log("\n[Avvio Analisi Live...]", Colors.HEADER)
+    
+    # Setup instances list for the user
+    ist_display = ", ".join(istances) if istances else "Nessuna istanza trovata"
+    log(f"Istanze NethVoice disponibili: {ist_display}", Colors.OKGREEN)
+    
+    target_instance = input(f"{Colors.WARNING}Inserisci il nome dell'istanza da analizzare (es. nethvoice1): {Colors.ENDC}").strip()
+    
+    if target_instance not in istances:
+        log(f"Attenzione: l'istanza '{target_instance}' non sembra attiva o corretta. L'analisi potrebbe fallire.", Colors.FAIL)
+
+    is_tls = input(f"{Colors.WARNING}Il traffico usa TLS/SIPS? (y/n) {Colors.ENDC}").strip().lower() == 'y'
+    proxy_instance = ""
+    if is_tls:
+        proxy_instance = input(f"{Colors.WARNING}Inserisci il nome del proxy per abilitare siptrace (es. nethvoice-proxy2): {Colors.ENDC}").strip()
+    
+    try:
+        duration = int(input(f"{Colors.WARNING}Per quanti secondi vuoi restare in ascolto? (es. 60): {Colors.ENDC}").strip())
+    except:
+        duration = 60
+        log("Valore non valido. Utilizzo 60 secondi come default.", Colors.FAIL)
+        
+    sngrep_file = f"capture_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pcap"
+    ast_file = f"asterisk_{target_instance}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    
+    # 1. Check and install sngrep
+    log("\nVerifica presenza sngrep...", Colors.OKGREEN)
+    if not run_cmd("command -v sngrep", shell=True):
+        log("sngrep non trovato. Installazione in corso...", Colors.WARNING)
+        run_cmd("dnf -y install http://repo.okay.com.mx/centos/9/x86_64/release/sngrep-1.6.0-1.el9.x86_64.rpm strace vim", shell=True)
+        log("sngrep installato.", Colors.OKGREEN)
+    else:
+        log("sngrep è già installato.", Colors.OKGREEN)
+        
+    # 2. Start captures
+    log(f"\nAvvio ascolto su {target_instance} per {duration} secondi...", Colors.HEADER)
+    log("Ti suggerisco di EVOCARE ORA LA CHIAMATA PROBLEMATICA.", Colors.FAIL)
+    
+    # SNGREP
+    if is_tls and proxy_instance:
+        log("Configurazione log TLS su proxy e sngrep locally...", Colors.WARNING)
+        # Abilita su kamailio
+        run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status on", shell=True)
+        # Crea hep2rc
+        with open("/root/.sngrephep2rc", "w") as f:
+            f.write("set capture.device lo\nset eep.listen on\nset eep.listen.version 2\nset eep.listen.address 127.0.0.1\nset eep.listen.port 5065\n")
+        
+        # Purtroppo salvare PCAP con SNGREP catturando via HEP non decripta il PCAP, ma permette l'esportazione SIP testuale
+        sngrep_cmd = f"sngrep -f /root/.sngrephep2rc -d any -N -O {sngrep_file}"
+    else:
+        sngrep_cmd = f"sngrep -r -d any -N -O {sngrep_file}"
+        
+    sngrep_proc = subprocess.Popen(sngrep_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # ASTERISK LOGS (in background redigenti in file)
+    ast_cmd = f"runagent -m {target_instance} -- podman exec -it freepbx asterisk -rvvvvvv > {ast_file} 2>&1"
+    ast_proc = subprocess.Popen(ast_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    # 3. Wait with visual progress bar
+    log("")
+    for i in range(duration):
+        progress = int((i+1) / duration * 100)
+        sys.stdout.write(f"\rIn ascolto: {create_bar(progress, length=40)}")
+        sys.stdout.flush()
+        time.sleep(1)
+    
+    print("\n")
+    log("Termine ascolto in corso, finalizzazione dei log...", Colors.WARNING)
+    
+    # 4. Stop captures
+    run_cmd("pkill -9 sngrep", shell=True)
+    # Pkill asterisk console sessions safely
+    run_cmd(f"runagent -m {target_instance} -- podman exec -it freepbx pkill -9 -f 'asterisk -r'", shell=True)
+    
+    if is_tls and proxy_instance:
+        # Disable siptrace
+        run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status off", shell=True)
+        # Cleanup
+        if os.path.exists("/root/.sngrephep2rc"):
+            os.remove("/root/.sngrephep2rc")
+        
+
+    log("\n[Cattura Completata con Successo!]", Colors.OKGREEN)
+    log(f"  - Dump Asterisk: {ast_file}")
+    log(f"  - Dump SNGREP (SIP): {sngrep_file}")
+    log("Puoi trasferire questi file aprendo WinSCP oppure copiarli dal terminale.\n", Colors.HEADER)
+    
+else:
+    log("\nAnalisi realtime saltata come da richiesta.", Colors.OKGREEN)
