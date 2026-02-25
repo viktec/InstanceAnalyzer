@@ -352,7 +352,13 @@ if choice == 'y':
             except Exception:
                 return
 
-            with open(output_file, 'wb') as f:
+            debug_file = output_file.replace('.pcap', '_debug.txt')
+            pkt_count = 0
+            SIP_METHODS = [b'INVITE', b'REGISTER', b'OPTIONS', b'ACK', b'BYE',
+                           b'CANCEL', b'SIP/2.0', b'SUBSCRIBE', b'NOTIFY',
+                           b'PUBLISH', b'MESSAGE', b'INFO', b'REFER', b'UPDATE', b'PRACK']
+
+            with open(output_file, 'wb') as f, open(debug_file, 'w') as dbg:
                 # PCAP Global Header (link type 1 = Ethernet)
                 f.write(struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1))
                 # Fake Ethernet header: dst_mac(6) + src_mac(6) + ethertype IPv4(2) = 14 bytes
@@ -366,13 +372,15 @@ if choice == 'y':
 
                         src_ip = b'\x00\x00\x00\x00'
                         dst_ip = b'\x00\x00\x00\x00'
-                        sport = 0
-                        dport = 0
+                        sport = 5060
+                        dport = 5060
                         sip_payload = b''
                         proto = 17  # UDP
+                        detected_ver = "UNKNOWN"
 
                         # --- HEPv3 (chunk-based, header "HEP3") ---
                         if data[:4] == b'HEP3':
+                            detected_ver = "HEPv3"
                             pos = 6
                             while pos + 6 <= len(data):
                                 ch_vendor = struct.unpack('!H', data[pos:pos+2])[0]
@@ -391,6 +399,7 @@ if choice == 'y':
 
                         # --- HEPv1 / HEPv2 ---
                         elif data[0] in (1, 2):
+                            detected_ver = f"HEPv{data[0]}"
                             hdr_len = data[1]
                             if hdr_len > len(data):
                                 continue
@@ -400,17 +409,48 @@ if choice == 'y':
                                 src_ip = data[8:12]
                                 dst_ip = data[12:16]
                             sip_payload = data[hdr_len:]
+
+                        # --- Fallback: forse è SIP puro senza HEP ---
                         else:
-                            continue
+                            for method in SIP_METHODS:
+                                if data.lstrip(b'\x00').startswith(method):
+                                    detected_ver = "RAW_SIP"
+                                    sip_payload = data.lstrip(b'\x00')
+                                    break
+
+                        # Debug: log dei primi 10 pacchetti
+                        if pkt_count < 10:
+                            dbg.write(f"=== PKT #{pkt_count+1} from {addr}, {len(data)} bytes, detected: {detected_ver} ===\n")
+                            dbg.write(f"Raw first 80 bytes (hex): {data[:80].hex()}\n")
+                            try:
+                                dbg.write(f"Raw first 80 bytes (ascii): {data[:80].decode('ascii', errors='replace')}\n")
+                            except:
+                                dbg.write(f"Raw first 80 bytes (ascii): <decode error>\n")
+                            if sip_payload:
+                                dbg.write(f"SIP payload len: {len(sip_payload)}\n")
+                                try:
+                                    dbg.write(f"SIP first 200 chars: {sip_payload[:200].decode('ascii', errors='replace')}\n")
+                                except:
+                                    dbg.write(f"SIP payload hex: {sip_payload[:100].hex()}\n")
+                            else:
+                                dbg.write("SIP payload: EMPTY!\n")
+                            dbg.write(f"Extracted: src={socket.inet_ntoa(src_ip)}:{sport} -> dst={socket.inet_ntoa(dst_ip)}:{dport}\n\n")
+                            dbg.flush()
 
                         if not sip_payload:
                             continue
+
+                        # Strip any trailing null bytes dal payload SIP
+                        sip_payload = sip_payload.rstrip(b'\x00')
+                        if not sip_payload:
+                            continue
+
+                        pkt_count += 1
 
                         # Costruiamo un pacchetto Ethernet+IP+UDP con il payload SIP reale
                         udp_len = 8 + len(sip_payload)
                         udp_hdr = struct.pack('!HHHH', sport, dport, udp_len, 0)
                         ip_total = 20 + udp_len
-                        # IP header senza checksum (campo checksum = 0)
                         ip_hdr_raw = struct.pack('!BBHHHBBH4s4s',
                             0x45, 0, ip_total, 0, 0x4000, 64, proto, 0, src_ip, dst_ip)
                         # Calcola IP checksum
@@ -435,6 +475,8 @@ if choice == 'y':
                         continue
                     except Exception:
                         continue
+
+                dbg.write(f"\n=== TOTALE PACCHETTI SCRITTI: {pkt_count} ===\n")
             sock.close()
 
         # Avvia il decoder HEP in un thread separato
