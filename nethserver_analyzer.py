@@ -273,18 +273,38 @@ while True:
 if choice == 'y':
     log("\n[Avvio Analisi Live...]", Colors.HEADER)
     
-    ist_display = ", ".join(istanze_selezionate) if 'istanze_selezionate' in locals() and istanze_selezionate else ", ".join(istances)
-    log(f"Istanze analizzate in precedenza: {ist_display}", Colors.OKGREEN)
-    
-    target_instance = input(f"{Colors.WARNING}Inserisci il nome dell'istanza da analizzare per il traffico (es. nethvoice1): {Colors.ENDC}").strip()
+    log("\nIstanze analizzate in precedenza (suggerite):", Colors.HEADER)
+    # Mostriamo solo quelle selezionate all'inizio
+    if 'istanze_selezionate' in locals() and istanze_selezionate:
+        for idx, inst in enumerate(istanze_selezionate):
+            log(f"  - {inst}", Colors.OKGREEN)
+    else:
+        log("  (Nessuna)", Colors.WARNING)
+        
+    log("\nTutte le istanze NethVoice disponibili sul sistema:", Colors.HEADER)
+    for inst in istances:
+        log(f"  - {inst}", Colors.OKGREEN)
+        
+    target_instance = input(f"\n{Colors.WARNING}Inserisci il nome dell'istanza da analizzare per il traffico (es. nethvoice1): {Colors.ENDC}").strip()
     
     if target_instance not in istances:
         log(f"Attenzione: l'istanza '{target_instance}' non sembra attiva o corretta. L'analisi potrebbe fallire.", Colors.FAIL)
 
-    is_tls = input(f"{Colors.WARNING}Il traffico usa TLS/SIPS? (y/n) {Colors.ENDC}").strip().lower() == 'y'
+    is_tls = input(f"\n{Colors.WARNING}Il traffico usa TLS/SIPS? (y/n) {Colors.ENDC}").strip().lower() == 'y'
     proxy_instance = ""
     if is_tls:
-        proxy_instance = input(f"{Colors.WARNING}Inserisci il nome del proxy per abilitare siptrace (es. nethvoice-proxy2): {Colors.ENDC}").strip()
+        log("\nModuli Proxy disponibili sul sistema:", Colors.HEADER)
+        # Recupera la lista dei proxy (prima avevamo scartato "nethvoice-proxyX" dalla lista istances)
+        proxy_raw = run_cmd("loginctl list-users | grep nethvoice-proxy | awk '{print $2}'", shell=True)
+        proxies = [p for p in proxy_raw.split('\n') if p]
+        
+        if proxies:
+            for p in proxies:
+                log(f"  - {p}", Colors.OKGREEN)
+        else:
+            log("  (Nessun proxy trovato in esecuzione)", Colors.WARNING)
+        
+        proxy_instance = input(f"\n{Colors.WARNING}Inserisci il nome del proxy per abilitare siptrace (es. nethvoice-proxy2): {Colors.ENDC}").strip()
     
     try:
         duration = int(input(f"{Colors.WARNING}Per quanti secondi vuoi restare in ascolto? (es. 60): {Colors.ENDC}").strip())
