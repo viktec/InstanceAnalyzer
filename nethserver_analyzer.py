@@ -339,8 +339,8 @@ if choice == 'y':
         run_cmd(f"runagent -m {proxy_instance} kamcmd siptrace.status on", shell=True)
         
         # In TLS riceviamo pacchetti HEP su loopback (5065). SNGREP non salva i pcap da socket UDP nativi, quindi usiamo tcpdump.
-        # Il file PCAP risultante conterrà i pacchetti UDP HEP decodificabili da Wireshark o sngrep.
-        sngrep_cmd = f"tcpdump -i lo udp port 5065 -w {sngrep_file}"
+        # Il file PCAP risultante conterrà i pacchetti UDP HEP decodificabili da Wireshark.
+        sngrep_cmd = f"tcpdump -i any -s 0 udp port 5065 -w {sngrep_file}"
         capture_proc_name = "tcpdump"
     else:
         sngrep_cmd = f"sngrep -r -d any -N -O {sngrep_file}"
@@ -378,9 +378,21 @@ if choice == 'y':
         
 
     log("\n[Cattura Completata con Successo!]", Colors.OKGREEN)
-    log(f"  - Dump Asterisk: {ast_file}")
-    log(f"  - Dump SNGREP (SIP): {sngrep_file}")
+    
+    # Get file sizes to reassure the user
+    ast_size = f"{os.path.getsize(ast_file)/1024:.1f} KB" if os.path.exists(ast_file) else "0 KB"
+    sngrep_size = f"{os.path.getsize(sngrep_file)/1024:.1f} KB" if os.path.exists(sngrep_file) else "0 KB"
+    
+    log(f"  - Dump Asterisk: {ast_file} ({ast_size})")
+    log(f"  - Dump SNGREP (SIP/HEP): {sngrep_file} ({sngrep_size})")
     log("Puoi trasferire questi file aprendo WinSCP oppure copiarli dal terminale.\n", Colors.HEADER)
+    
+    if is_tls:
+        log("NOTA BENE PER I FILE TLS (PROXY):", Colors.WARNING)
+        log("I log catturati in modalità proxy TLS sono decodificati ma incapsulati in pacchetti HEP sulle porte UDP/5065.")
+        log("SNGREP *NON PUÒ* LEGGERE OFFLINE I PACCHETTI HEP DA FILE .PCAP CON IL COMANDO 'sngrep -I'!!", Colors.FAIL)
+        log("Per vedere il contenuto di questo file pcap scaricalo sul PC e aprilo con **Wireshark** (Tasto destro su un pacchetto -> Decode As -> HEP).", Colors.WARNING)
+        log("")
     
 else:
     log("\nAnalisi realtime saltata come da richiesta.", Colors.OKGREEN)
