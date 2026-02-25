@@ -360,8 +360,13 @@ if choice == 'y':
     print("\n")
     log("Termine ascolto in corso, finalizzazione dei log...", Colors.WARNING)
     
-    # 4. Stop captures
-    run_cmd("pkill -9 sngrep", shell=True)
+    # 4. Stop captures gracefully to allow PCAP flushing
+    run_cmd("pkill -INT sngrep", shell=True)
+    time.sleep(1.5) # Give it time to flush the .pcap file
+    # Ensure terminal is restored correctly (fix staircase effect)
+    run_cmd("stty sane", shell=True)
+    print("\r", end="")
+
     # Pkill asterisk console sessions safely
     run_cmd(f"runagent -m {target_instance} -- podman exec -it freepbx pkill -9 -f 'asterisk -r'", shell=True)
     
