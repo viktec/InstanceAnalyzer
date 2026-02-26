@@ -1,7 +1,7 @@
 # InstanceAnalyzer – NethServer 8 & NethVoice Diagnostic Tool
 
 Tool di diagnostica per installazioni **NethServer 8** con moduli **NethVoice**.  
-Ora suddiviso in **due script indipendenti** + un modulo di utility condivise.
+**Due script indipendenti** + un modulo di utility condivise.
 
 > **Requisiti**: Python (nessuna dipendenza esterna), esecuzione come `root`.
 
